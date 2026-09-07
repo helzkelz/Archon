@@ -1,0 +1,44 @@
+name: Repository Integrity
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: repo-integrity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Patch integrity
+        shell: bash
+        run: |
+          if git rev-parse HEAD^ >/dev/null 2>&1; then git diff --check HEAD^ HEAD; fi
+      - name: Repository boundary checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          bad=[]
+          for name in subprocess.check_output(['git','ls-files'], text=True).splitlines():
+              p=Path(name)
+              if not p.is_file(): continue
+              try: text=p.read_text(encoding='utf-8')
+              except (UnicodeDecodeError,OSError): continue
+              for n,line in enumerate(text.splitlines(),1):
+                  if line.startswith(('<<<<<<< ','>>>>>>> ')): bad.append(f'{name}:{n}: unresolved merge marker')
+          for p in Path('.github/workflows').glob('*.y*ml'):
+              text=p.read_text(encoding='utf-8')
+              if 'working-directory: ../' in text or 'working-directory: ..\\' in text: bad.append(f'{p}: working-directory escapes repository root')
+          if bad: raise SystemExit('\n'.join(bad))
+          print('Repository integrity baseline passed.')
+          PY
